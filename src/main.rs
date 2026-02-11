@@ -435,35 +435,40 @@ fn format_stop_data(stop_name: &str, rows: &[RowData], now: DateTime<Local>) -> 
 
 fn print_stops_grid(title: &str, stops: Vec<StopDisplay>) {
     println!("{}", title);
-    println!();
 
     // Find max times count
     let max_times = stops.iter().map(|s| s.times.len()).max().unwrap_or(0);
     let col_width = 32;
 
-    // Print stop names (may wrap to multiple lines)
-    let max_name_lines = 3;
-    for line_idx in 0..max_name_lines {
-        for stop in &stops {
-            let name_parts: Vec<&str> = stop.name.split_whitespace().collect();
-            let mut current_line = String::new();
-            let mut lines = Vec::new();
+    // Pre-compute wrapped names for all stops
+    let wrapped_names: Vec<Vec<String>> = stops.iter().map(|stop| {
+        let name_parts: Vec<&str> = stop.name.split_whitespace().collect();
+        let mut current_line = String::new();
+        let mut lines = Vec::new();
 
-            for part in name_parts {
-                if current_line.len() + part.len() + 1 <= col_width {
-                    if !current_line.is_empty() {
-                        current_line.push(' ');
-                    }
-                    current_line.push_str(part);
-                } else {
-                    lines.push(current_line.clone());
-                    current_line = part.to_string();
+        for part in name_parts {
+            if current_line.len() + part.len() + 1 <= col_width {
+                if !current_line.is_empty() {
+                    current_line.push(' ');
                 }
+                current_line.push_str(part);
+            } else {
+                lines.push(current_line.clone());
+                current_line = part.to_string();
             }
-            if !current_line.is_empty() {
-                lines.push(current_line);
-            }
+        }
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+        lines
+    }).collect();
 
+    // Find actual max name lines needed
+    let max_name_lines = wrapped_names.iter().map(|lines| lines.len()).max().unwrap_or(1);
+
+    // Print stop names (may wrap to multiple lines)
+    for line_idx in 0..max_name_lines {
+        for lines in &wrapped_names {
             let line_text = if line_idx < lines.len() {
                 &lines[line_idx]
             } else {
@@ -474,8 +479,6 @@ fn print_stops_grid(title: &str, stops: Vec<StopDisplay>) {
         }
         println!();
     }
-
-    println!();
 
     // Print times
     for time_idx in 0..max_times {
