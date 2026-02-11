@@ -13,7 +13,10 @@ A Rust application that provides real-time transit information for MBTA Route 60
 ## Usage
 
 ### Web Version
-Open `index.html` in your browser for a mobile-friendly web interface with:
+
+**Live Demo:** [https://adamatan.github.io/mbta/](https://adamatan.github.io/mbta/)
+
+Or open `index.html` locally in your browser for a mobile-friendly web interface with:
 - Real-time updates from MBTA API
 - Auto-refresh every 30 seconds (optional)
 - Collapsible debug section with:
