@@ -188,19 +188,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rows_brookline = filter_rows(rows_brookline);
 
     // 2. Show Schedule
-    println!("Route 60:");
-    print_stop_schedule("  Kenmore (outbound)", &rows_kenmore, now);
-    println!();
-    print_stop_schedule("  Brookline Ave @ Fullerton (outbound)", &rows_brookline_ave, now);
-    println!();
-    print_stop_schedule("  Pearl St @ Brookline Village (outbound)", &rows_pearl, now);
-    println!();
-    print_stop_schedule("  High St @ Highland Rd (inbound)", &rows_high, now);
-    println!();
-    println!("Green Line D:");
-    print_stop_schedule("  Copley (to Riverside)", &rows_copley, now);
-    println!();
-    print_stop_schedule("  Brookline Village (to Kenmore)", &rows_brookline, now);
+    let route60_stops = vec![
+        format_stop_data("Kenmore (outbound)", &rows_kenmore, now),
+        format_stop_data("Brookline Ave @ Fullerton (outbound)", &rows_brookline_ave, now),
+        format_stop_data("Pearl St @ Brookline Village (outbound)", &rows_pearl, now),
+        format_stop_data("High St @ Highland Rd (inbound)", &rows_high, now),
+    ];
+    print_stops_grid("Route 60:", route60_stops);
+
+    let green_line_stops = vec![
+        format_stop_data("Copley (to Riverside)", &rows_copley, now),
+        format_stop_data("Brookline Village (to Kenmore)", &rows_brookline, now),
+    ];
+    print_stops_grid("Green Line D:", green_line_stops);
 
     Ok(())
 }
@@ -338,7 +338,7 @@ fn parse_time(time_str: Option<String>) -> Option<DateTime<Local>> {
 }
 
 fn format_time_compact(dt: DateTime<Local>, now: DateTime<Local>) -> String {
-    let time_str = dt.format("%H:%M:%S").to_string();
+    let time_str = dt.format("%H:%M").to_string();
     let diff = dt.signed_duration_since(now).num_minutes();
     if diff.abs() < 1 {
         time_str
@@ -349,13 +349,59 @@ fn format_time_compact(dt: DateTime<Local>, now: DateTime<Local>) -> String {
     }
 }
 
-fn print_stop_schedule(stop_name: &str, rows: &[RowData], now: DateTime<Local>) {
+fn format_time_compact_with_seconds(dt: DateTime<Local>, now: DateTime<Local>, include_seconds: bool) -> String {
+    let time_str = if include_seconds {
+        dt.format("%H:%M:%S").to_string()
+    } else {
+        dt.format("%H:%M").to_string()
+    };
+    let diff = dt.signed_duration_since(now).num_minutes();
+    if diff.abs() < 1 {
+        time_str
+    } else if diff < 0 {
+        format!("{} ({}m ago)", time_str, diff.abs())
+    } else {
+        format!("{} (in {}m)", time_str, diff)
+    }
+}
+
+fn display_width(s: &str) -> usize {
+    s.chars().map(|c| {
+        match c {
+            '🟢' | '📅' => 2,
+            _ => 1,
+        }
+    }).sum()
+}
+
+fn pad_to_width(s: &str, target_width: usize) -> String {
+    let current_width = display_width(s);
+    if current_width >= target_width {
+        s.to_string()
+    } else {
+        format!("{}{}", s, " ".repeat(target_width - current_width))
+    }
+}
+
+struct StopDisplay {
+    name: String,
+    times: Vec<String>,
+}
+
+fn format_stop_data(stop_name: &str, rows: &[RowData], now: DateTime<Local>) -> StopDisplay {
+    let mut times = Vec::new();
+
     if rows.is_empty() {
-        println!("{:<45} No upcoming trips", stop_name);
-        return;
+        times.push("No upcoming trips".to_string());
+        return StopDisplay {
+            name: stop_name.to_string(),
+            times,
+        };
     }
 
     let mut count = 0;
+    let first_live_index = rows.iter().position(|r| r.pred_dt.is_some());
+
     for (idx, row) in rows.iter().enumerate() {
         if count >= 3 {
             break;
@@ -363,8 +409,9 @@ fn print_stop_schedule(stop_name: &str, rows: &[RowData], now: DateTime<Local>) 
 
         let time_str = match (row.sched_dt, row.pred_dt) {
             (_, Some(pred)) => {
-                // If live data exists, show only live
-                format!("🟢 {}", format_time_compact(pred, now))
+                // Include seconds only for first live departure
+                let include_seconds = first_live_index == Some(idx);
+                format!("🟢 {}", format_time_compact_with_seconds(pred, now, include_seconds))
             }
             (Some(sched), None) => {
                 format!("📅 {}", format_time_compact(sched, now))
@@ -372,15 +419,76 @@ fn print_stop_schedule(stop_name: &str, rows: &[RowData], now: DateTime<Local>) 
             (None, None) => continue,
         };
 
-        if idx == 0 {
-            println!("{:<45} {}", stop_name, time_str);
-        } else {
-            println!("{:<45} {}", "", time_str);
-        }
+        times.push(time_str);
         count += 1;
     }
 
-    if count == 0 {
-        println!("{:<45} No upcoming trips", stop_name);
+    if times.is_empty() {
+        times.push("No upcoming trips".to_string());
     }
+
+    StopDisplay {
+        name: stop_name.to_string(),
+        times,
+    }
+}
+
+fn print_stops_grid(title: &str, stops: Vec<StopDisplay>) {
+    println!("{}", title);
+    println!();
+
+    // Find max times count
+    let max_times = stops.iter().map(|s| s.times.len()).max().unwrap_or(0);
+    let col_width = 32;
+
+    // Print stop names (may wrap to multiple lines)
+    let max_name_lines = 3;
+    for line_idx in 0..max_name_lines {
+        for stop in &stops {
+            let name_parts: Vec<&str> = stop.name.split_whitespace().collect();
+            let mut current_line = String::new();
+            let mut lines = Vec::new();
+
+            for part in name_parts {
+                if current_line.len() + part.len() + 1 <= col_width {
+                    if !current_line.is_empty() {
+                        current_line.push(' ');
+                    }
+                    current_line.push_str(part);
+                } else {
+                    lines.push(current_line.clone());
+                    current_line = part.to_string();
+                }
+            }
+            if !current_line.is_empty() {
+                lines.push(current_line);
+            }
+
+            let line_text = if line_idx < lines.len() {
+                &lines[line_idx]
+            } else {
+                ""
+            };
+
+            print!("{}  ", pad_to_width(line_text, col_width));
+        }
+        println!();
+    }
+
+    println!();
+
+    // Print times
+    for time_idx in 0..max_times {
+        for stop in &stops {
+            let time_text = if time_idx < stop.times.len() {
+                &stop.times[time_idx]
+            } else {
+                ""
+            };
+            print!("{}  ", pad_to_width(time_text, col_width));
+        }
+        println!();
+    }
+
+    println!();
 }
