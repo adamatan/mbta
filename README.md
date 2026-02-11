@@ -47,6 +47,7 @@ b60
 
 ### Route 60
 - **Kenmore (outbound)** - Route 60 towards Chestnut Hill
+- **Brookline Ave @ Fullerton (outbound)** - Route 60 towards Chestnut Hill
 - **Pearl St @ Brookline Village (outbound)** - Route 60 towards Chestnut Hill
 - **High St @ Highland Rd (inbound)** - Route 60 towards Kenmore
 
@@ -71,6 +72,7 @@ https://api-v3.mbta.com
 | Stop Name | Stop ID | Direction | Direction ID | Description |
 |-----------|---------|-----------|--------------|-------------|
 | Kenmore | `place-kencl` | Outbound | `0` | Origin stop, towards Chestnut Hill |
+| Brookline Ave @ Fullerton St | `1519` | Outbound | `0` | Towards Chestnut Hill |
 | Pearl St @ Brookline Village | `11366` | Outbound | `0` | Towards Chestnut Hill |
 | High St @ Highland Rd | `1553` | Inbound | `1` | Towards Kenmore |
 

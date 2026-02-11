@@ -76,6 +76,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         is_origin: true,
     };
 
+    let stop_brookline_ave = StopConfig {
+        route_id: "60",
+        stop_id: "1519",
+        direction_id: 0,
+        is_origin: false,
+    };
+
     let stop_pearl = StopConfig {
         route_id: "60",
         stop_id: "11366",
@@ -106,16 +113,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // 1. Fetch Data Concurrently
-    let (res_kenmore, res_pearl, res_high, res_copley, res_brookline) = tokio::join!(
-        get_schedule_and_predictions(&client, &stop_kenmore, now),
-        get_schedule_and_predictions(&client, &stop_pearl, now),
-        get_schedule_and_predictions(&client, &stop_high, now),
-        get_schedule_and_predictions(&client, &stop_copley, now),
-        get_schedule_and_predictions(&client, &stop_brookline, now)
-    );
+    let (res_kenmore, res_brookline_ave, res_pearl, res_high, res_copley, res_brookline) =
+        tokio::join!(
+            get_schedule_and_predictions(&client, &stop_kenmore, now),
+            get_schedule_and_predictions(&client, &stop_brookline_ave, now),
+            get_schedule_and_predictions(&client, &stop_pearl, now),
+            get_schedule_and_predictions(&client, &stop_high, now),
+            get_schedule_and_predictions(&client, &stop_copley, now),
+            get_schedule_and_predictions(&client, &stop_brookline, now)
+        );
 
     // Check for rate limiting first
     if res_kenmore.is_err() && res_kenmore.as_ref().unwrap_err().to_string() == "Rate limited"
+        || res_brookline_ave.is_err()
+            && res_brookline_ave.as_ref().unwrap_err().to_string() == "Rate limited"
         || res_pearl.is_err() && res_pearl.as_ref().unwrap_err().to_string() == "Rate limited"
         || res_high.is_err() && res_high.as_ref().unwrap_err().to_string() == "Rate limited"
         || res_copley.is_err() && res_copley.as_ref().unwrap_err().to_string() == "Rate limited"
@@ -128,6 +139,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let rows_kenmore = res_kenmore.unwrap_or_else(|e| {
         eprintln!("⚠️  Error fetching Kenmore data: {}", e);
+        vec![]
+    });
+    let rows_brookline_ave = res_brookline_ave.unwrap_or_else(|e| {
+        eprintln!("⚠️  Error fetching Brookline Ave data: {}", e);
         vec![]
     });
     let rows_pearl = res_pearl.unwrap_or_else(|e| {
@@ -166,6 +181,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let rows_kenmore = filter_rows(rows_kenmore);
+    let rows_brookline_ave = filter_rows(rows_brookline_ave);
     let rows_pearl = filter_rows(rows_pearl);
     let rows_high = filter_rows(rows_high);
     let rows_copley = filter_rows(rows_copley);
@@ -174,6 +190,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // 2. Show Schedule
     println!("Route 60:");
     print_stop_schedule("  Kenmore (outbound)", &rows_kenmore, now);
+    println!();
+    print_stop_schedule("  Brookline Ave @ Fullerton (outbound)", &rows_brookline_ave, now);
     println!();
     print_stop_schedule("  Pearl St @ Brookline Village (outbound)", &rows_pearl, now);
     println!();
