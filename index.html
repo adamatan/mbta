@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MBTA Live Tracker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .controls {
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .last-updated {
+            color: #666;
+            font-size: 14px;
+            margin-left: auto;
+        }
+
+        .route-section {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .route-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .stops-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+        }
+
+        .stop-column {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            gap: 8px;
+        }
+
+        .stop-name {
+            font-weight: 600;
+            color: #555;
+            font-size: 14px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #f0f0f0;
+            word-wrap: break-word;
+            line-height: 1.3;
+            height: 56px;
+            display: flex;
+            align-items: flex-end;
+        }
+
+        .departures-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .departure {
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+
+        .departure span:last-child {
+            font-variant-numeric: tabular-nums;
+        }
+
+        .live-indicator {
+            font-size: 16px;
+        }
+
+        .scheduled-indicator {
+            font-size: 16px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .debug-section {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .debug-header {
+            padding: 15px 20px;
+            background: #f8f9fa;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            color: #555;
+            user-select: none;
+        }
+
+        .debug-header:hover {
+            background: #e9ecef;
+        }
+
+        .debug-toggle {
+            font-size: 12px;
+            color: #667eea;
+        }
+
+        .debug-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .debug-content.open {
+            max-height: 2000px;
+            overflow: auto;
+        }
+
+        .debug-item {
+            border-top: 1px solid #f0f0f0;
+        }
+
+        .debug-item-header {
+            padding: 12px 20px;
+            background: #f8f9fa;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            color: #555;
+            user-select: none;
+            font-size: 14px;
+        }
+
+        .debug-item-header:hover {
+            background: #e9ecef;
+        }
+
+        .debug-item-toggle {
+            font-size: 11px;
+            color: #667eea;
+        }
+
+        .debug-item-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .debug-item-content.open {
+            max-height: 2000px;
+            overflow: auto;
+        }
+
+        .debug-item-body {
+            padding: 15px 20px;
+        }
+
+        .debug-item-body h4 {
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .api-link {
+            display: inline-block;
+            color: #667eea;
+            text-decoration: none;
+            font-size: 12px;
+            margin-bottom: 8px;
+            word-break: break-all;
+        }
+
+        .api-link:hover {
+            text-decoration: underline;
+        }
+
+        pre {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 11px;
+            line-height: 1.5;
+            max-height: 400px;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 600px) {
+            body {
+                padding: 10px;
+            }
+
+            h1 {
+                font-size: 22px;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .last-updated {
+                margin-left: 0;
+                text-align: center;
+            }
+
+            button {
+                width: 100%;
+            }
+
+            .stops-grid {
+                grid-template-columns: 1fr;
+                gap: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚇 MBTA Live Tracker</h1>
+            <div class="subtitle">Route 60 & Green Line D</div>
+        </header>
+
+        <div class="controls">
+            <button id="refreshBtn" onclick="fetchAllData()">Refresh</button>
+            <button id="autoRefreshBtn" onclick="toggleAutoRefresh()">Auto-refresh: Off</button>
+            <div class="last-updated" id="lastUpdated"></div>
+        </div>
+
+        <div id="errorContainer"></div>
+        <div id="content"></div>
+
+        <div class="debug-section">
+            <div class="debug-header" onclick="toggleDebug()">
+                <span>🔍 Debug Information</span>
+                <span class="debug-toggle" id="debugToggle">Show</span>
+            </div>
+            <div class="debug-content" id="debugContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const BASE_URL = 'https://api-v3.mbta.com';
+        let autoRefreshInterval = null;
+        let debugData = {};
+
+        const stops = [
+            { route: '60', stopId: 'place-kencl', direction: 0, name: 'Kenmore (outbound)', isOrigin: true, group: 'Route 60' },
+            { route: '60', stopId: '11366', direction: 0, name: 'Pearl St @ Brookline Village (outbound)', isOrigin: false, group: 'Route 60' },
+            { route: '60', stopId: '1553', direction: 1, name: 'High St @ Highland Rd (inbound)', isOrigin: false, group: 'Route 60' },
+            { route: 'Green-D', stopId: 'place-coecl', direction: 0, name: 'Copley (to Riverside)', isOrigin: true, group: 'Green Line D' },
+            { route: 'Green-D', stopId: 'place-bvmnl', direction: 1, name: 'Brookline Village (to Kenmore)', isOrigin: true, group: 'Green Line D' }
+        ];
+
+
+        function parseTime(timeStr) {
+            return timeStr ? new Date(timeStr) : null;
+        }
+
+        function formatTime(dt, now, includeSeconds = false) {
+            if (!dt) return 'N/A';
+
+            const timeStr = includeSeconds
+                ? dt.toLocaleTimeString('en-US', { hour12: false })
+                : dt.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+            const diffMs = dt - now;
+            const diffMin = Math.round(diffMs / 60000);
+
+            if (Math.abs(diffMin) < 1) {
+                return timeStr;
+            } else if (diffMin < 0) {
+                return `${timeStr} (${Math.abs(diffMin)}m ago)`;
+            } else {
+                return `${timeStr} (in ${diffMin}m)`;
+            }
+        }
+
+        function buildScheduleUrl(route, stopId, direction) {
+            const now = new Date();
+            const lookback = new Date(now.getTime() - 30 * 60000);
+            const minTime = lookback.toTimeString().substring(0, 5);
+            return `${BASE_URL}/schedules?filter[route]=${route}&filter[stop]=${stopId}&filter[direction_id]=${direction}&filter[min_time]=${minTime}&sort=arrival_time&page[limit]=20`;
+        }
+
+        function buildPredictionUrl(route, stopId, direction) {
+            return `${BASE_URL}/predictions?filter[route]=${route}&filter[stop]=${stopId}&filter[direction_id]=${direction}&sort=arrival_time&page[limit]=3`;
+        }
+
+        async function getStopData(stop) {
+            const schedUrl = buildScheduleUrl(stop.route, stop.stopId, stop.direction);
+            const predUrl = buildPredictionUrl(stop.route, stop.stopId, stop.direction);
+
+            let schedResp, predResp, schedData, predData;
+            let schedError = null, predError = null;
+
+            try {
+                [schedResp, predResp] = await Promise.all([
+                    fetch(schedUrl),
+                    fetch(predUrl)
+                ]);
+
+                // Store debug data with URLs and status
+                debugData[stop.name] = {
+                    schedules: { url: schedUrl, status: schedResp.status },
+                    predictions: { url: predUrl, status: predResp.status }
+                };
+
+                if (schedResp.status === 429) {
+                    schedError = 'Rate limited (429)';
+                    throw new Error('Rate limited');
+                }
+                if (predResp.status === 429) {
+                    predError = 'Rate limited (429)';
+                    throw new Error('Rate limited');
+                }
+
+                [schedData, predData] = await Promise.all([
+                    schedResp.json(),
+                    predResp.json()
+                ]);
+
+                // Update debug data with successful responses
+                debugData[stop.name].schedules.data = schedData;
+                debugData[stop.name].predictions.data = predData;
+
+            } catch (error) {
+                // Store error in debug data
+                if (!debugData[stop.name]) {
+                    debugData[stop.name] = {
+                        schedules: { url: schedUrl, error: error.message },
+                        predictions: { url: predUrl, error: error.message }
+                    };
+                } else {
+                    if (schedError) debugData[stop.name].schedules.error = schedError;
+                    if (predError) debugData[stop.name].predictions.error = predError;
+                }
+                throw error;
+            }
+
+            // Create prediction map
+            const predMap = new Map();
+            predData.data.forEach(p => {
+                predMap.set(p.relationships.trip.data.id, p.attributes);
+            });
+
+            // Process schedules
+            const rows = schedData.data.map(s => {
+                const tripId = s.relationships.trip.data.id;
+                const schedTimeStr = stop.isOrigin
+                    ? s.attributes.departure_time
+                    : (s.attributes.arrival_time || s.attributes.departure_time);
+                const schedDt = parseTime(schedTimeStr);
+
+                const pred = predMap.get(tripId);
+                let predDt = null;
+                if (pred) {
+                    const predTimeStr = stop.isOrigin
+                        ? pred.departure_time
+                        : (pred.arrival_time || pred.departure_time);
+                    predDt = parseTime(predTimeStr);
+                }
+
+                return { schedDt, predDt };
+            });
+
+            // Sort by time
+            rows.sort((a, b) => {
+                const aTime = a.predDt || a.schedDt;
+                const bTime = b.predDt || b.schedDt;
+                return aTime - bTime;
+            });
+
+            // Filter out trips that departed more than 5 mins ago
+            const now = new Date();
+            const filtered = rows.filter(r => {
+                const sDiff = r.schedDt ? (r.schedDt - now) / 60000 : 0;
+                const pDiff = r.predDt ? (r.predDt - now) / 60000 : sDiff;
+                return sDiff > -5 || pDiff > -5;
+            });
+
+            return filtered.slice(0, 3);
+        }
+
+        async function fetchAllData() {
+            const errorContainer = document.getElementById('errorContainer');
+            const content = document.getElementById('content');
+            const refreshBtn = document.getElementById('refreshBtn');
+
+            errorContainer.innerHTML = '';
+            content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading...</p></div>';
+            refreshBtn.disabled = true;
+
+            try {
+                const results = await Promise.all(stops.map(stop => getStopData(stop)));
+
+                const now = new Date();
+
+                // Group by route
+                const groups = {};
+                stops.forEach((stop, i) => {
+                    if (!groups[stop.group]) {
+                        groups[stop.group] = [];
+                    }
+                    groups[stop.group].push({ stop, data: results[i] });
+                });
+
+                // Render
+                let html = '';
+                for (const [groupName, items] of Object.entries(groups)) {
+                    html += `<div class="route-section">
+                        <div class="route-title">${groupName}</div>
+                        <div class="stops-grid">`;
+
+                    items.forEach(({ stop, data }) => {
+                        html += `<div class="stop-column">
+                            <div class="stop-name">${stop.name}</div>
+                            <div class="departures-list">`;
+
+                        if (data.length === 0) {
+                            html += `<span>No upcoming trips</span>`;
+                        } else {
+                            // Find the first live departure
+                            let firstLiveIndex = data.findIndex(row => row.predDt);
+
+                            data.forEach((row, index) => {
+                                if (row.predDt) {
+                                    // Include seconds only for the first live departure
+                                    const includeSeconds = (index === firstLiveIndex);
+                                    html += `<div class="departure">
+                                        <span class="live-indicator">🟢</span>
+                                        <span>${formatTime(row.predDt, now, includeSeconds)}</span>
+                                    </div>`;
+                                } else if (row.schedDt) {
+                                    html += `<div class="departure">
+                                        <span class="scheduled-indicator">📅</span>
+                                        <span>${formatTime(row.schedDt, now, false)}</span>
+                                    </div>`;
+                                }
+                            });
+                        }
+
+                        html += `</div></div>`;
+                    });
+
+                    html += `</div></div>`;
+                }
+
+                content.innerHTML = html;
+
+                // Update last updated time
+                document.getElementById('lastUpdated').textContent =
+                    `Updated: ${now.toLocaleTimeString()}`;
+
+                // Update debug section
+                updateDebugSection();
+
+            } catch (error) {
+                if (error.message === 'Rate limited') {
+                    errorContainer.innerHTML = `
+                        <div class="error">
+                            ⚠️ MBTA API rate limit exceeded. Please wait a moment and try again.
+                        </div>`;
+                } else {
+                    errorContainer.innerHTML = `
+                        <div class="error">
+                            ⚠️ Error: ${error.message}
+                        </div>`;
+                }
+                content.innerHTML = '';
+
+                // Update debug section even on error
+                updateDebugSection();
+            } finally {
+                refreshBtn.disabled = false;
+            }
+        }
+
+        function updateDebugSection() {
+            const debugContent = document.getElementById('debugContent');
+            let html = '';
+
+            let index = 0;
+            for (const [stopName, data] of Object.entries(debugData)) {
+                html += `
+                    <div class="debug-item">
+                        <div class="debug-item-header" onclick="toggleDebugItem(${index})">
+                            <span>${stopName}</span>
+                            <span class="debug-item-toggle" id="debugItemToggle${index}">Show</span>
+                        </div>
+                        <div class="debug-item-content" id="debugItemContent${index}">
+                            <div class="debug-item-body">
+                                <h4>📅 Schedules API</h4>
+                                <a href="${data.schedules.url}" target="_blank" class="api-link">🔗 ${data.schedules.url}</a>`;
+
+                if (data.schedules.status) {
+                    html += `<div><strong>Status:</strong> ${data.schedules.status}</div>`;
+                }
+
+                if (data.schedules.error) {
+                    html += `<div style="color: #c33; margin: 8px 0;"><strong>Error:</strong> ${data.schedules.error}</div>`;
+                } else if (data.schedules.data) {
+                    html += `<pre>${JSON.stringify(data.schedules.data, null, 2)}</pre>`;
+                } else {
+                    html += `<div style="color: #999; margin: 8px 0;">No data available</div>`;
+                }
+
+                html += `<h4>🟢 Predictions API</h4>
+                                <a href="${data.predictions.url}" target="_blank" class="api-link">🔗 ${data.predictions.url}</a>`;
+
+                if (data.predictions.status) {
+                    html += `<div><strong>Status:</strong> ${data.predictions.status}</div>`;
+                }
+
+                if (data.predictions.error) {
+                    html += `<div style="color: #c33; margin: 8px 0;"><strong>Error:</strong> ${data.predictions.error}</div>`;
+                } else if (data.predictions.data) {
+                    html += `<pre>${JSON.stringify(data.predictions.data, null, 2)}</pre>`;
+                } else {
+                    html += `<div style="color: #999; margin: 8px 0;">No data available</div>`;
+                }
+
+                html += `</div>
+                        </div>
+                    </div>`;
+                index++;
+            }
+
+            debugContent.innerHTML = html;
+        }
+
+        function toggleDebugItem(index) {
+            const content = document.getElementById(`debugItemContent${index}`);
+            const toggle = document.getElementById(`debugItemToggle${index}`);
+
+            if (content.classList.contains('open')) {
+                content.classList.remove('open');
+                toggle.textContent = 'Show';
+            } else {
+                content.classList.add('open');
+                toggle.textContent = 'Hide';
+            }
+        }
+
+        function toggleDebug() {
+            const content = document.getElementById('debugContent');
+            const toggle = document.getElementById('debugToggle');
+
+            if (content.classList.contains('open')) {
+                content.classList.remove('open');
+                toggle.textContent = 'Show';
+            } else {
+                content.classList.add('open');
+                toggle.textContent = 'Hide';
+            }
+        }
+
+        function toggleAutoRefresh() {
+            const btn = document.getElementById('autoRefreshBtn');
+
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                btn.textContent = 'Auto-refresh: Off';
+            } else {
+                autoRefreshInterval = setInterval(fetchAllData, 30000); // 30 seconds
+                btn.textContent = 'Auto-refresh: On (30s)';
+            }
+        }
+
+        // Load data on page load
+        fetchAllData();
+    </script>
+</body>
+</html>

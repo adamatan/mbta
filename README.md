@@ -12,15 +12,28 @@ A Rust application that provides real-time transit information for MBTA Route 60
 
 ## Usage
 
-### Prerequisites
+### Web Version
+Open `index.html` in your browser for a mobile-friendly web interface with:
+- Real-time updates from MBTA API
+- Auto-refresh every 30 seconds (optional)
+- Collapsible debug section with:
+  - Clickable API URLs that open raw responses in new tabs
+  - Individual sections per stop (default collapsed)
+  - HTTP status codes and error messages
+  - Works even when rate limited
+- Responsive design for mobile and desktop
+
+### CLI Version
+
+#### Prerequisites
 - **Rust** and **Cargo** installed
 
-### Run
+#### Run
 ```bash
 cargo run
 ```
 
-### Install
+#### Install
 Install the `b60` command globally:
 ```bash
 cargo install --path .
