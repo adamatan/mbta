@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MBTA Live Tracker</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <style>
         * {
             margin: 0;
@@ -387,6 +391,13 @@
             min-height: 18px;
         }
 
+        .modal-map {
+            height: 200px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            z-index: 0;
+        }
+
         /* Make departure rows clickable */
         .departure {
             cursor: pointer;
@@ -479,6 +490,7 @@
                 <div class="modal-status" id="modalStatus"></div>
                 <div class="modal-countdown" id="modalCountdown"></div>
                 <div class="modal-absolute-time" id="modalAbsoluteTime"></div>
+                <div id="modalMap" class="modal-map"></div>
                 <div class="modal-extra" id="modalExtra"></div>
             </div>
         </div>
@@ -496,14 +508,17 @@
         let modalFetchTimer = null;
         let modalCountdownTimer = null;
         let mainAutoRefreshWasPaused = false;
+        let modalMap = null;
+        let modalStopMarker = null;
+        let modalBusMarker = null;
 
         const stops = [
-            { route: '60', stopId: 'place-kencl', direction: 0, name: 'Kenmore (outbound)', isOrigin: true, group: 'Route 60' },
-            { route: '60', stopId: '1519', direction: 0, name: 'Brookline Ave @ Fullerton (outbound)', isOrigin: false, group: 'Route 60' },
-            { route: '60', stopId: '11366', direction: 0, name: 'Pearl St @ Brookline Village (outbound)', isOrigin: false, group: 'Route 60' },
-            { route: '60', stopId: '1553', direction: 1, name: 'High St @ Highland Rd (inbound)', isOrigin: false, group: 'Route 60' },
-            { route: 'Green-D', stopId: 'place-coecl', direction: 0, name: 'Copley (to Riverside)', isOrigin: true, group: 'Green Line D' },
-            { route: 'Green-D', stopId: 'place-bvmnl', direction: 1, name: 'Brookline Village (to Kenmore)', isOrigin: true, group: 'Green Line D' }
+            { route: '60', stopId: 'place-kencl', direction: 0, name: 'Kenmore (outbound)', isOrigin: true, group: 'Route 60', lat: 42.348949, lng: -71.095169 },
+            { route: '60', stopId: '1519', direction: 0, name: 'Brookline Ave @ Fullerton (outbound)', isOrigin: false, group: 'Route 60', lat: 42.34496, lng: -71.100993 },
+            { route: '60', stopId: '11366', direction: 0, name: 'Pearl St @ Brookline Village (outbound)', isOrigin: false, group: 'Route 60', lat: 42.332409, lng: -71.116433 },
+            { route: '60', stopId: '1553', direction: 1, name: 'High St @ Highland Rd (inbound)', isOrigin: false, group: 'Route 60', lat: 42.326067, lng: -71.120199 },
+            { route: 'Green-D', stopId: 'place-coecl', direction: 0, name: 'Copley (to Riverside)', isOrigin: true, group: 'Green Line D', lat: 42.349974, lng: -71.077447 },
+            { route: 'Green-D', stopId: 'place-bvmnl', direction: 1, name: 'Brookline Village (to Kenmore)', isOrigin: true, group: 'Green Line D', lat: 42.332608, lng: -71.116857 }
         ];
 
 
@@ -860,6 +875,22 @@
             document.getElementById('modalAbsoluteTime').textContent = '';
             document.getElementById('modalExtra').textContent = '';
 
+            // Initialize Leaflet map
+            modalMap = L.map('modalMap').setView([stop.lat, stop.lng], 15);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+                maxZoom: 18
+            }).addTo(modalMap);
+            modalStopMarker = L.marker([stop.lat, stop.lng], {
+                icon: L.divIcon({
+                    className: '',
+                    html: '<div style="font-size:24px;text-align:center;">🚏</div>',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                })
+            }).addTo(modalMap);
+            setTimeout(() => { if (modalMap) modalMap.invalidateSize(); }, 300);
+
             modalFetchAndUpdate();
             modalFetchTimer = setInterval(modalFetchAndUpdate, 10000);
         }
@@ -868,6 +899,13 @@
             modalOpen = false;
             modalStop = null;
             modalData = null;
+
+            if (modalMap) {
+                modalMap.remove();
+                modalMap = null;
+            }
+            modalStopMarker = null;
+            modalBusMarker = null;
 
             document.getElementById('arrivalModal').style.display = 'none';
 
@@ -896,7 +934,7 @@
             try {
                 document.getElementById('modalExtra').textContent = 'Refreshing...';
 
-                const predUrl = buildPredictionUrl(stop.route, stop.stopId, stop.direction);
+                const predUrl = buildPredictionUrl(stop.route, stop.stopId, stop.direction) + '&include=vehicle';
                 const predResp = await fetch(predUrl);
 
                 if (predResp.status === 429) {
@@ -907,7 +945,18 @@
                 const predData = await predResp.json();
                 const now = new Date();
 
+                // Extract vehicle data from included array
+                const vehicles = {};
+                if (predData.included) {
+                    for (const inc of predData.included) {
+                        if (inc.type === 'vehicle') {
+                            vehicles[inc.id] = inc.attributes;
+                        }
+                    }
+                }
+
                 let nextPred = null;
+                let nextVehicleId = null;
                 for (const p of predData.data) {
                     const timeStr = stop.isOrigin
                         ? p.attributes.departure_time
@@ -915,8 +964,40 @@
                     const dt = parseTime(timeStr);
                     if (dt && dt > now) {
                         nextPred = { predDt: dt, schedDt: null };
+                        const vehicleRel = p.relationships && p.relationships.vehicle && p.relationships.vehicle.data;
+                        if (vehicleRel) nextVehicleId = vehicleRel.id;
                         break;
                     }
+                }
+
+                // Update bus marker on map
+                const vehicle = nextVehicleId ? vehicles[nextVehicleId] : null;
+                if (vehicle && vehicle.latitude && vehicle.longitude && modalMap) {
+                    const busLatLng = [vehicle.latitude, vehicle.longitude];
+                    if (modalBusMarker) {
+                        modalBusMarker.setLatLng(busLatLng);
+                    } else {
+                        modalBusMarker = L.marker(busLatLng, {
+                            icon: L.divIcon({
+                                className: '',
+                                html: '<div style="font-size:24px;text-align:center;">🚌</div>',
+                                iconSize: [28, 28],
+                                iconAnchor: [14, 14]
+                            })
+                        }).addTo(modalMap);
+                    }
+                    // Fit bounds to show both markers
+                    const bounds = L.latLngBounds([
+                        [stop.lat, stop.lng],
+                        busLatLng
+                    ]);
+                    modalMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+                } else if (modalMap) {
+                    if (modalBusMarker) {
+                        modalMap.removeLayer(modalBusMarker);
+                        modalBusMarker = null;
+                    }
+                    modalMap.setView([stop.lat, stop.lng], 15);
                 }
 
                 if (nextPred) {
