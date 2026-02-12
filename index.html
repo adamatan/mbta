@@ -1000,13 +1000,10 @@
             } else if (diffSec < 30) {
                 countdownEl.textContent = 'Arriving';
                 countdownEl.className = 'modal-countdown arriving';
-            } else if (diffSec < 60) {
-                countdownEl.textContent = '<1m';
-                countdownEl.className = 'modal-countdown arriving';
             } else {
                 const mins = Math.floor(diffSec / 60);
                 const secs = diffSec % 60;
-                countdownEl.textContent = `${mins}m ${String(secs).padStart(2, '0')}s`;
+                countdownEl.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
                 countdownEl.className = 'modal-countdown';
             }
         }
