@@ -285,6 +285,121 @@
             margin: 20px auto;
         }
 
+        /* Modal Overlay */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            animation: modalFadeIn 0.2s ease;
+        }
+
+        @keyframes modalFadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 16px;
+            padding: 40px 32px;
+            max-width: 420px;
+            width: 100%;
+            position: relative;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: modalSlideUp 0.25s ease;
+        }
+
+        @keyframes modalSlideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 12px;
+            right: 16px;
+            background: none;
+            border: none;
+            font-size: 32px;
+            color: #999;
+            cursor: pointer;
+            line-height: 1;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: color 0.2s, background 0.2s;
+            width: auto;
+        }
+
+        .modal-close:hover {
+            color: #333;
+            background: #f0f0f0;
+        }
+
+        .modal-stop-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+        }
+
+        .modal-status {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .modal-countdown {
+            font-size: 64px;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 8px;
+            font-variant-numeric: tabular-nums;
+            line-height: 1.1;
+        }
+
+        .modal-countdown.departed {
+            color: #c33;
+        }
+
+        .modal-countdown.arriving {
+            color: #2a9d2a;
+        }
+
+        .modal-absolute-time {
+            font-size: 20px;
+            color: #666;
+            margin-bottom: 16px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .modal-extra {
+            font-size: 13px;
+            color: #999;
+            min-height: 18px;
+        }
+
+        /* Make departure rows clickable */
+        .departure {
+            cursor: pointer;
+            border-radius: 4px;
+            padding: 2px 4px;
+            margin: -2px -4px;
+            transition: background 0.15s;
+        }
+
+        .departure:hover {
+            background: #f0f0f0;
+        }
+
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -317,6 +432,18 @@
                 grid-template-columns: 1fr;
                 gap: 15px;
             }
+
+            .modal-content {
+                padding: 32px 20px;
+            }
+
+            .modal-countdown {
+                font-size: 48px;
+            }
+
+            .modal-close {
+                width: auto;
+            }
         }
     </style>
 </head>
@@ -343,12 +470,32 @@
             </div>
             <div class="debug-content" id="debugContent"></div>
         </div>
+
+        <!-- Live Arrival Detail Modal -->
+        <div id="arrivalModal" class="modal-overlay" style="display:none;">
+            <div class="modal-content">
+                <button class="modal-close" id="modalCloseBtn" aria-label="Close">&times;</button>
+                <div class="modal-stop-name" id="modalStopName"></div>
+                <div class="modal-status" id="modalStatus"></div>
+                <div class="modal-countdown" id="modalCountdown"></div>
+                <div class="modal-absolute-time" id="modalAbsoluteTime"></div>
+                <div class="modal-extra" id="modalExtra"></div>
+            </div>
+        </div>
     </div>
 
     <script>
         const BASE_URL = 'https://api-v3.mbta.com';
         let autoRefreshInterval = null;
         let debugData = {};
+
+        // Modal state
+        let modalOpen = false;
+        let modalStop = null;
+        let modalData = null;
+        let modalFetchTimer = null;
+        let modalCountdownTimer = null;
+        let mainAutoRefreshWasPaused = false;
 
         const stops = [
             { route: '60', stopId: 'place-kencl', direction: 0, name: 'Kenmore (outbound)', isOrigin: true, group: 'Route 60' },
@@ -533,12 +680,18 @@
                                 if (row.predDt) {
                                     // Include seconds only for the first live departure
                                     const includeSeconds = (index === firstLiveIndex);
-                                    html += `<div class="departure">
+                                    html += `<div class="departure"
+                                        data-stop-id="${stop.stopId}"
+                                        data-route="${stop.route}"
+                                        data-direction="${stop.direction}">
                                         <span class="live-indicator">🟢</span>
                                         <span>${formatTime(row.predDt, now, includeSeconds)}</span>
                                     </div>`;
                                 } else if (row.schedDt) {
-                                    html += `<div class="departure">
+                                    html += `<div class="departure"
+                                        data-stop-id="${stop.stopId}"
+                                        data-route="${stop.route}"
+                                        data-direction="${stop.direction}">
                                         <span class="scheduled-indicator">📅</span>
                                         <span>${formatTime(row.schedDt, now, false)}</span>
                                     </div>`;
@@ -674,8 +827,248 @@
             }
         }
 
+        // Modal functions
+        function openModal(stopId, route, direction) {
+            const stop = stops.find(s =>
+                s.stopId === stopId &&
+                s.route === route &&
+                String(s.direction) === String(direction)
+            );
+            if (!stop) {
+                console.error('Stop not found:', stopId, route, direction);
+                return;
+            }
+
+            modalStop = stop;
+            modalOpen = true;
+
+            const hash = `#stop=${encodeURIComponent(stopId)}&route=${encodeURIComponent(route)}&dir=${direction}`;
+            history.replaceState(null, '', hash);
+
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                mainAutoRefreshWasPaused = true;
+            }
+
+            const modal = document.getElementById('arrivalModal');
+            modal.style.display = 'flex';
+
+            document.getElementById('modalStopName').textContent = stop.name;
+            document.getElementById('modalStatus').textContent = 'Loading...';
+            document.getElementById('modalCountdown').textContent = '--';
+            document.getElementById('modalCountdown').className = 'modal-countdown';
+            document.getElementById('modalAbsoluteTime').textContent = '';
+            document.getElementById('modalExtra').textContent = '';
+
+            modalFetchAndUpdate();
+            modalFetchTimer = setInterval(modalFetchAndUpdate, 10000);
+        }
+
+        function closeModal() {
+            modalOpen = false;
+            modalStop = null;
+            modalData = null;
+
+            document.getElementById('arrivalModal').style.display = 'none';
+
+            if (modalFetchTimer) {
+                clearInterval(modalFetchTimer);
+                modalFetchTimer = null;
+            }
+            if (modalCountdownTimer) {
+                clearInterval(modalCountdownTimer);
+                modalCountdownTimer = null;
+            }
+
+            history.replaceState(null, '', window.location.pathname + window.location.search);
+
+            if (mainAutoRefreshWasPaused) {
+                mainAutoRefreshWasPaused = false;
+                autoRefreshInterval = setInterval(fetchAllData, 30000);
+            }
+        }
+
+        async function modalFetchAndUpdate() {
+            if (!modalStop || !modalOpen) return;
+
+            const stop = modalStop;
+
+            try {
+                document.getElementById('modalExtra').textContent = 'Refreshing...';
+
+                const predUrl = buildPredictionUrl(stop.route, stop.stopId, stop.direction);
+                const predResp = await fetch(predUrl);
+
+                if (predResp.status === 429) {
+                    document.getElementById('modalExtra').textContent = 'Rate limited. Retrying...';
+                    return;
+                }
+
+                const predData = await predResp.json();
+                const now = new Date();
+
+                let nextPred = null;
+                for (const p of predData.data) {
+                    const timeStr = stop.isOrigin
+                        ? p.attributes.departure_time
+                        : (p.attributes.arrival_time || p.attributes.departure_time);
+                    const dt = parseTime(timeStr);
+                    if (dt && dt > now) {
+                        nextPred = { predDt: dt, schedDt: null };
+                        break;
+                    }
+                }
+
+                if (nextPred) {
+                    modalData = nextPred;
+                    document.getElementById('modalStatus').innerHTML =
+                        '<span style="font-size:20px;">🟢</span> Live Prediction';
+                    document.getElementById('modalExtra').textContent =
+                        `Last updated: ${now.toLocaleTimeString()}`;
+                } else {
+                    const schedUrl = buildScheduleUrl(stop.route, stop.stopId, stop.direction);
+                    const schedResp = await fetch(schedUrl);
+
+                    if (schedResp.status === 429) {
+                        document.getElementById('modalExtra').textContent = 'Rate limited. Retrying...';
+                        return;
+                    }
+
+                    const schedData = await schedResp.json();
+                    let nextSched = null;
+                    for (const s of schedData.data) {
+                        const timeStr = stop.isOrigin
+                            ? s.attributes.departure_time
+                            : (s.attributes.arrival_time || s.attributes.departure_time);
+                        const dt = parseTime(timeStr);
+                        if (dt && dt > now) {
+                            nextSched = { predDt: null, schedDt: dt };
+                            break;
+                        }
+                    }
+
+                    if (nextSched) {
+                        modalData = nextSched;
+                        document.getElementById('modalStatus').innerHTML =
+                            '<span style="font-size:20px;">📅</span> Scheduled (no live data)';
+                        document.getElementById('modalExtra').textContent =
+                            `Last updated: ${now.toLocaleTimeString()}`;
+                    } else {
+                        modalData = null;
+                        document.getElementById('modalStatus').textContent = 'No upcoming departures';
+                        document.getElementById('modalCountdown').textContent = '--';
+                        document.getElementById('modalCountdown').className = 'modal-countdown';
+                        document.getElementById('modalAbsoluteTime').textContent = '';
+                        document.getElementById('modalExtra').textContent =
+                            `Last checked: ${now.toLocaleTimeString()}`;
+                        return;
+                    }
+                }
+
+                updateModalCountdown();
+
+                if (modalCountdownTimer) clearInterval(modalCountdownTimer);
+                modalCountdownTimer = setInterval(updateModalCountdown, 1000);
+
+            } catch (err) {
+                console.error('Modal fetch error:', err);
+                document.getElementById('modalExtra').textContent =
+                    `Error: ${err.message}. Retrying...`;
+            }
+        }
+
+        function updateModalCountdown() {
+            if (!modalData || !modalOpen) return;
+
+            const now = new Date();
+            const targetDt = modalData.predDt || modalData.schedDt;
+            if (!targetDt) return;
+
+            const diffMs = targetDt - now;
+            const diffSec = Math.floor(diffMs / 1000);
+            const countdownEl = document.getElementById('modalCountdown');
+            const absoluteEl = document.getElementById('modalAbsoluteTime');
+
+            absoluteEl.textContent = targetDt.toLocaleTimeString('en-US', { hour12: false });
+
+            if (diffSec < -60) {
+                countdownEl.textContent = 'Departed';
+                countdownEl.className = 'modal-countdown departed';
+            } else if (diffSec < 0) {
+                countdownEl.textContent = 'Departing';
+                countdownEl.className = 'modal-countdown departed';
+            } else if (diffSec < 30) {
+                countdownEl.textContent = 'Arriving';
+                countdownEl.className = 'modal-countdown arriving';
+            } else if (diffSec < 60) {
+                countdownEl.textContent = '<1m';
+                countdownEl.className = 'modal-countdown arriving';
+            } else {
+                const mins = Math.floor(diffSec / 60);
+                const secs = diffSec % 60;
+                countdownEl.textContent = `${mins}m ${String(secs).padStart(2, '0')}s`;
+                countdownEl.className = 'modal-countdown';
+            }
+        }
+
+        function checkHashAndOpenModal() {
+            const hash = location.hash;
+            if (!hash || hash.length < 2) return;
+
+            const params = new URLSearchParams(hash.substring(1));
+            const stopId = params.get('stop');
+            const route = params.get('route');
+            const dir = params.get('dir');
+
+            if (stopId && route && dir !== null) {
+                openModal(decodeURIComponent(stopId), decodeURIComponent(route), dir);
+            }
+        }
+
+        // Event delegation for departure clicks
+        document.getElementById('content').addEventListener('click', function(e) {
+            const departure = e.target.closest('.departure');
+            if (!departure) return;
+
+            const stopId = departure.dataset.stopId;
+            const route = departure.dataset.route;
+            const direction = departure.dataset.direction;
+
+            if (stopId && route && direction !== undefined) {
+                openModal(stopId, route, direction);
+            }
+        });
+
+        // Close on backdrop click
+        document.getElementById('arrivalModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeModal();
+            }
+        });
+
+        // Close on X button
+        document.getElementById('modalCloseBtn').addEventListener('click', closeModal);
+
+        // Close on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && modalOpen) {
+                closeModal();
+            }
+        });
+
+        // Listen for hash changes
+        window.addEventListener('hashchange', function() {
+            if (location.hash) {
+                checkHashAndOpenModal();
+            } else if (modalOpen) {
+                closeModal();
+            }
+        });
+
         // Load data on page load
-        fetchAllData();
+        fetchAllData().then(() => {
+            checkHashAndOpenModal();
+        });
     </script>
 </body>
 </html>
