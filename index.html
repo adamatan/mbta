@@ -398,6 +398,14 @@
             z-index: 0;
         }
 
+        .stop-tooltip {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+
         /* Make departure rows clickable */
         .departure {
             cursor: pointer;
@@ -508,6 +516,9 @@
         let modalFetchTimer = null;
         let modalCountdownTimer = null;
         let mainAutoRefreshWasPaused = false;
+        let modalRefreshCountdown = 0;
+        let modalRefreshTimer = null;
+        let modalLastUpdatedTime = null;
         let modalMap = null;
         let modalStopMarker = null;
         let modalBusMarker = null;
@@ -877,8 +888,8 @@
 
             // Initialize Leaflet map
             modalMap = L.map('modalMap').setView([stop.lat, stop.lng], 15);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
                 maxZoom: 18
             }).addTo(modalMap);
             modalStopMarker = L.marker([stop.lat, stop.lng], {
@@ -888,11 +899,11 @@
                     iconSize: [28, 28],
                     iconAnchor: [14, 14]
                 })
-            }).addTo(modalMap);
+            }).bindTooltip(stop.name, { permanent: true, direction: 'top', offset: [0, -10], className: 'stop-tooltip' }).addTo(modalMap);
             setTimeout(() => { if (modalMap) modalMap.invalidateSize(); }, 300);
 
             modalFetchAndUpdate();
-            modalFetchTimer = setInterval(modalFetchAndUpdate, 10000);
+            startModalRefreshCountdown();
         }
 
         function closeModal() {
@@ -917,6 +928,11 @@
                 clearInterval(modalCountdownTimer);
                 modalCountdownTimer = null;
             }
+            if (modalRefreshTimer) {
+                clearInterval(modalRefreshTimer);
+                modalRefreshTimer = null;
+            }
+            modalLastUpdatedTime = null;
 
             history.replaceState(null, '', window.location.pathname + window.location.search);
 
@@ -924,6 +940,28 @@
                 mainAutoRefreshWasPaused = false;
                 autoRefreshInterval = setInterval(fetchAllData, 30000);
             }
+        }
+
+        function startModalRefreshCountdown() {
+            modalRefreshCountdown = 10;
+            if (modalRefreshTimer) clearInterval(modalRefreshTimer);
+            modalRefreshTimer = setInterval(() => {
+                if (!modalOpen) return;
+                modalRefreshCountdown--;
+                if (modalRefreshCountdown <= 0) {
+                    modalRefreshCountdown = 10;
+                    modalFetchAndUpdate();
+                }
+                updateModalExtra();
+            }, 1000);
+        }
+
+        function updateModalExtra() {
+            if (!modalOpen) return;
+            const el = document.getElementById('modalExtra');
+            if (!modalLastUpdatedTime) return;
+            const timeStr = modalLastUpdatedTime.toLocaleTimeString();
+            el.textContent = `Updated ${timeStr} · refresh in ${modalRefreshCountdown}s`;
         }
 
         async function modalFetchAndUpdate() {
@@ -1000,12 +1038,13 @@
                     modalMap.setView([stop.lat, stop.lng], 15);
                 }
 
+                modalLastUpdatedTime = now;
+                modalRefreshCountdown = 10;
+
                 if (nextPred) {
                     modalData = nextPred;
                     document.getElementById('modalStatus').innerHTML =
                         '<span style="font-size:20px;">🟢</span> Live Prediction';
-                    document.getElementById('modalExtra').textContent =
-                        `Last updated: ${now.toLocaleTimeString()}`;
                 } else {
                     const schedUrl = buildScheduleUrl(stop.route, stop.stopId, stop.direction);
                     const schedResp = await fetch(schedUrl);
@@ -1032,8 +1071,6 @@
                         modalData = nextSched;
                         document.getElementById('modalStatus').innerHTML =
                             '<span style="font-size:20px;">📅</span> Scheduled (no live data)';
-                        document.getElementById('modalExtra').textContent =
-                            `Last updated: ${now.toLocaleTimeString()}`;
                     } else {
                         modalData = null;
                         document.getElementById('modalStatus').textContent = 'No upcoming departures';
