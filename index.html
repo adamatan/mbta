@@ -931,7 +931,7 @@
                     iconSize: [24, 24],
                     iconAnchor: [12, 12]
                 })
-            }).addTo(modalMap);
+            }).bindTooltip(stop.name, { direction: 'top', offset: [0, -10] }).addTo(modalMap);
             // Fetch and display all stops along the route (cached 10 min)
             const cacheKey = `${stop.route}_${stop.direction}`;
             const cached = routeStopsCache[cacheKey];
