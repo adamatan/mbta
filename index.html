@@ -102,6 +102,20 @@
             margin-bottom: 15px;
             padding-bottom: 10px;
             border-bottom: 2px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .schedule-link {
+            font-size: 13px;
+            font-weight: 500;
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .schedule-link:hover {
+            text-decoration: underline;
         }
 
         .stops-grid {
@@ -398,13 +412,6 @@
             z-index: 0;
         }
 
-        .stop-tooltip {
-            font-size: 12px;
-            font-weight: 600;
-            padding: 3px 8px;
-            border-radius: 4px;
-            white-space: nowrap;
-        }
 
         /* Make departure rows clickable */
         .departure {
@@ -499,6 +506,7 @@
                 <div class="modal-countdown" id="modalCountdown"></div>
                 <div class="modal-absolute-time" id="modalAbsoluteTime"></div>
                 <div id="modalMap" class="modal-map"></div>
+                <a id="modalScheduleLink" href="#" target="_blank" class="schedule-link" style="display:block;margin-bottom:12px;">Full schedule</a>
                 <div class="modal-extra" id="modalExtra"></div>
             </div>
         </div>
@@ -522,6 +530,7 @@
         let modalMap = null;
         let modalStopMarker = null;
         let modalBusMarker = null;
+        const routeStopsCache = {}; // { route: { data, fetchedAt } }
 
         const stops = [
             { route: '60', stopId: 'place-kencl', direction: 0, name: 'Kenmore (outbound)', isOrigin: true, group: 'Route 60', lat: 42.348949, lng: -71.095169 },
@@ -658,7 +667,13 @@
                 return sDiff > -5 || pDiff > -5;
             });
 
-            return filtered.slice(0, 3);
+            // Drop schedule-only trips in the past when live predictions exist
+            const hasLive = filtered.some(r => r.predDt);
+            const result = hasLive
+                ? filtered.filter(r => r.predDt || (r.schedDt && r.schedDt > now))
+                : filtered;
+
+            return result.slice(0, 3);
         }
 
         async function fetchAllData() {
@@ -687,8 +702,12 @@
                 // Render
                 let html = '';
                 for (const [groupName, items] of Object.entries(groups)) {
+                    const routeId = items[0].stop.route;
                     html += `<div class="route-section">
-                        <div class="route-title">${groupName}</div>
+                        <div class="route-title">
+                            <span>${groupName}</span>
+                            <a href="https://www.mbta.com/schedules/${encodeURIComponent(routeId)}" target="_blank" class="schedule-link">Full schedule</a>
+                        </div>
                         <div class="stops-grid">`;
 
                     items.forEach(({ stop, data }) => {
@@ -885,6 +904,8 @@
             document.getElementById('modalCountdown').className = 'modal-countdown';
             document.getElementById('modalAbsoluteTime').textContent = '';
             document.getElementById('modalExtra').textContent = '';
+            document.getElementById('modalScheduleLink').href =
+                `https://www.mbta.com/schedules/${encodeURIComponent(stop.route)}?direction_id=${stop.direction}&origin=${encodeURIComponent(stop.stopId)}`;
 
             // Initialize Leaflet map
             modalMap = L.map('modalMap').setView([stop.lat, stop.lng], 15);
@@ -895,15 +916,36 @@
             modalStopMarker = L.marker([stop.lat, stop.lng], {
                 icon: L.divIcon({
                     className: '',
-                    html: '<div style="font-size:24px;text-align:center;">🚏</div>',
-                    iconSize: [28, 28],
-                    iconAnchor: [14, 14]
+                    html: '<div style="font-size:14px;text-align:center;background:#e53935;color:white;border-radius:50%;width:24px;height:24px;line-height:24px;box-shadow:0 2px 4px rgba(0,0,0,0.4);">🚏</div>',
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
                 })
-            }).bindTooltip(stop.name, { permanent: true, direction: 'top', offset: [0, -10], className: 'stop-tooltip' }).addTo(modalMap);
+            }).addTo(modalMap);
+            // Fetch and display all stops along the route (cached 10 min)
+            const cacheKey = `${stop.route}_${stop.direction}`;
+            const cached = routeStopsCache[cacheKey];
+            const stopsPromise = (cached && Date.now() - cached.fetchedAt < 600000)
+                ? Promise.resolve(cached.data)
+                : fetch(`${BASE_URL}/stops?filter[route]=${encodeURIComponent(stop.route)}&filter[direction_id]=${stop.direction}`)
+                    .then(r => r.json())
+                    .then(data => { routeStopsCache[cacheKey] = { data, fetchedAt: Date.now() }; return data; });
+            stopsPromise.then(data => {
+                    if (!modalMap) return;
+                    data.data.forEach(s => {
+                        const lat = s.attributes.latitude;
+                        const lng = s.attributes.longitude;
+                        if (!lat || !lng || s.id === stop.stopId) return;
+                        L.circleMarker([lat, lng], {
+                            radius: 4, color: '#667eea', fillColor: '#667eea', fillOpacity: 0.6, weight: 1
+                        }).bindTooltip(s.attributes.name, { direction: 'top', offset: [0, -5] }).addTo(modalMap);
+                    });
+                })
+                .catch(() => {})
+                .then(() => {
+                    modalFetchAndUpdate();
+                    startModalRefreshCountdown();
+                });
             setTimeout(() => { if (modalMap) modalMap.invalidateSize(); }, 300);
-
-            modalFetchAndUpdate();
-            startModalRefreshCountdown();
         }
 
         function closeModal() {
@@ -972,7 +1014,7 @@
             try {
                 document.getElementById('modalExtra').textContent = 'Refreshing...';
 
-                const predUrl = buildPredictionUrl(stop.route, stop.stopId, stop.direction) + '&include=vehicle';
+                const predUrl = buildPredictionUrl(stop.route, stop.stopId, stop.direction) + '&include=vehicle,stop';
                 const predResp = await fetch(predUrl);
 
                 if (predResp.status === 429) {
@@ -983,18 +1025,41 @@
                 const predData = await predResp.json();
                 const now = new Date();
 
-                // Extract vehicle data from included array
+                // Extract vehicle and stop data from included array
                 const vehicles = {};
+                const vehicleStopIds = {};
+                const stopParentMap = {}; // child stop ID -> parent station ID
                 if (predData.included) {
                     for (const inc of predData.included) {
                         if (inc.type === 'vehicle') {
                             vehicles[inc.id] = inc.attributes;
+                            const vstop = inc.relationships && inc.relationships.stop && inc.relationships.stop.data;
+                            if (vstop) vehicleStopIds[inc.id] = vstop.id;
+                        } else if (inc.type === 'stop') {
+                            const parent = inc.relationships && inc.relationships.parent_station && inc.relationships.parent_station.data;
+                            stopParentMap[inc.id] = parent ? parent.id : inc.id;
                         }
                     }
                 }
+                // Resolve a stop ID to its parent station ID (fetches if unknown)
+                const toParent = async (id) => {
+                    if (stopParentMap[id]) return stopParentMap[id];
+                    try {
+                        const resp = await fetch(`${BASE_URL}/stops/${encodeURIComponent(id)}`);
+                        if (resp.ok) {
+                            const d = await resp.json();
+                            const parent = d.data.relationships && d.data.relationships.parent_station && d.data.relationships.parent_station.data;
+                            const parentId = parent ? parent.id : id;
+                            stopParentMap[id] = parentId;
+                            return parentId;
+                        }
+                    } catch (e) {}
+                    return id;
+                };
 
                 let nextPred = null;
                 let nextVehicleId = null;
+                let targetStopId = null;
                 for (const p of predData.data) {
                     const timeStr = stop.isOrigin
                         ? p.attributes.departure_time
@@ -1002,6 +1067,8 @@
                     const dt = parseTime(timeStr);
                     if (dt && dt > now) {
                         nextPred = { predDt: dt, schedDt: null };
+                        const stopRel = p.relationships && p.relationships.stop && p.relationships.stop.data;
+                        if (stopRel) targetStopId = stopRel.id;
                         const vehicleRel = p.relationships && p.relationships.vehicle && p.relationships.vehicle.data;
                         if (vehicleRel) nextVehicleId = vehicleRel.id;
                         break;
@@ -1043,8 +1110,27 @@
 
                 if (nextPred) {
                     modalData = nextPred;
-                    document.getElementById('modalStatus').innerHTML =
-                        '<span style="font-size:20px;">🟢</span> Live Prediction';
+                    let statusText = '<span style="font-size:20px;">🟢</span> Live Tracking';
+                    // Count actual stops between vehicle and target using cached route stops
+                    const vehicleCurrentStopId = nextVehicleId ? vehicleStopIds[nextVehicleId] : null;
+                    const cacheKey = `${stop.route}_${stop.direction}`;
+                    const cachedStops = routeStopsCache[cacheKey];
+                    if (vehicleCurrentStopId && targetStopId && cachedStops) {
+                        const routeStopList = cachedStops.data.data;
+                        const vParent = await toParent(vehicleCurrentStopId);
+                        const tParent = await toParent(targetStopId);
+                        const vIdx = routeStopList.findIndex(s => s.id === vParent);
+                        const tIdx = routeStopList.findIndex(s => s.id === tParent);
+                        if (vIdx !== -1 && tIdx !== -1) {
+                            const stopsAway = Math.abs(tIdx - vIdx);
+                            if (stopsAway > 0 && stopsAway <= 20) {
+                                statusText += ` · ${stopsAway} stop${stopsAway === 1 ? '' : 's'} away`;
+                            } else if (stopsAway === 0) {
+                                statusText += ' · at your stop';
+                            }
+                        }
+                    }
+                    document.getElementById('modalStatus').innerHTML = statusText;
                 } else {
                     const schedUrl = buildScheduleUrl(stop.route, stop.stopId, stop.direction);
                     const schedResp = await fetch(schedUrl);

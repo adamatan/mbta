@@ -37,6 +37,39 @@ struct PredictionAttributes {
 #[derive(Debug, Deserialize)]
 struct PredictionRelationships {
     trip: DataWrapper,
+    vehicle: Option<OptionalDataWrapper>,
+    stop: Option<DataWrapper>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OptionalDataWrapper {
+    data: Option<IdWrapper>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IncludedResource {
+    #[serde(rename = "type")]
+    resource_type: String,
+    id: String,
+    #[serde(default)]
+    relationships: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct RouteStopsResponse {
+    data: Vec<RouteStop>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RouteStop {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PredictionApiResponse {
+    data: Vec<Resource<PredictionAttributes, PredictionRelationships>>,
+    #[serde(default)]
+    included: Vec<IncludedResource>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +94,7 @@ struct StopConfig {
 struct RowData {
     sched_dt: Option<DateTime<Local>>,
     pred_dt: Option<DateTime<Local>>,
+    stops_away: Option<i32>,
 }
 
 #[tokio::main]
@@ -162,9 +196,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         vec![]
     });
 
-    // Filter rows > 5 mins ago
+    // Filter rows > 5 mins ago, drop past schedule-only when live data exists
     let filter_rows = |rows: Vec<RowData>| -> Vec<RowData> {
-        rows.into_iter()
+        let filtered: Vec<RowData> = rows.into_iter()
             .filter(|r| {
                 let s_diff = r
                     .sched_dt
@@ -174,10 +208,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .pred_dt
                     .map(|t| t.signed_duration_since(now).num_minutes())
                     .unwrap_or(s_diff);
-                // Keep if scheduled or predicted is strictly greater than -5 mins
                 s_diff > -5 || p_diff > -5
             })
-            .collect()
+            .collect();
+        let has_live = filtered.iter().any(|r| r.pred_dt.is_some());
+        if has_live {
+            filtered.into_iter()
+                .filter(|r| r.pred_dt.is_some() || r.sched_dt.map(|t| t > now).unwrap_or(false))
+                .collect()
+        } else {
+            filtered
+        }
     };
 
     let rows_kenmore = filter_rows(rows_kenmore);
@@ -250,7 +291,7 @@ async fn get_schedule_and_predictions(
             }
         };
 
-    // 2. Fetch Predictions
+    // 2. Fetch Predictions (with vehicle data)
     let pred_url = format!("{}/predictions", BASE_URL);
     let pred_params = [
         ("filter[stop]", stop.stop_id.to_string()),
@@ -258,6 +299,7 @@ async fn get_schedule_and_predictions(
         ("filter[direction_id]", stop.direction_id.to_string()),
         ("sort", "arrival_time".to_string()),
         ("page[limit]", "3".to_string()),
+        ("include", "vehicle,stop".to_string()),
     ];
 
     let pred_resp = client
@@ -274,7 +316,7 @@ async fn get_schedule_and_predictions(
 
     let pred_text = pred_resp.text().await?;
 
-    let pred_resp: ApiResponse<Resource<PredictionAttributes, PredictionRelationships>> =
+    let pred_resp: PredictionApiResponse =
         match serde_json::from_str(&pred_text) {
             Ok(v) => v,
             Err(e) => {
@@ -284,10 +326,118 @@ async fn get_schedule_and_predictions(
             }
         };
 
-    // Map predictions by trip_id
-    let mut predictions_map = HashMap::new();
+    // Extract vehicle current stop IDs and build child->parent stop map
+    let mut vehicle_stop_ids: HashMap<String, String> = HashMap::new(); // vehicle_id -> child stop ID
+    let mut stop_parent_map: HashMap<String, String> = HashMap::new(); // child stop ID -> parent station ID
+    for inc in &pred_resp.included {
+        if inc.resource_type == "vehicle" {
+            if let Some(stop_data) = inc.relationships.get("stop")
+                .and_then(|s| s.get("data"))
+                .and_then(|d| d.get("id"))
+                .and_then(|id| id.as_str()) {
+                vehicle_stop_ids.insert(inc.id.clone(), stop_data.to_string());
+            }
+        } else if inc.resource_type == "stop" {
+            let parent_id = inc.relationships.get("parent_station")
+                .and_then(|ps| ps.get("data"))
+                .and_then(|d| d.get("id"))
+                .and_then(|id| id.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| inc.id.clone());
+            stop_parent_map.insert(inc.id.clone(), parent_id);
+        }
+    }
+    // Collect all stop IDs we need to resolve (vehicle stops + prediction stops)
+    let pred_stop_ids: Vec<String> = pred_resp.data.iter()
+        .filter_map(|p| p.relationships.stop.as_ref().map(|s| s.data.id.clone()))
+        .collect();
+    let all_stop_ids: Vec<String> = vehicle_stop_ids.values().cloned()
+        .chain(pred_stop_ids.into_iter())
+        .collect();
+    // Batch-resolve unknown child stop IDs to their parent stations
+    let unknown_ids: Vec<String> = all_stop_ids.iter()
+        .filter(|id| !stop_parent_map.contains_key(*id))
+        .cloned()
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    if !unknown_ids.is_empty() {
+        let ids_param = unknown_ids.join(",");
+        if let Ok(resp) = client
+            .get(&format!("{}/stops", BASE_URL))
+            .header("accept", "application/vnd.api+json")
+            .query(&[("filter[id]", &ids_param)])
+            .send()
+            .await
+        {
+            if let Ok(text) = resp.text().await {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(data) = parsed.get("data").and_then(|d| d.as_array()) {
+                        for item in data {
+                            let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            let parent_id = item.get("relationships")
+                                .and_then(|r| r.get("parent_station"))
+                                .and_then(|ps| ps.get("data"))
+                                .and_then(|d| d.get("id"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(id);
+                            stop_parent_map.insert(id.to_string(), parent_id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let to_parent = |id: &str| -> String {
+        stop_parent_map.get(id).cloned().unwrap_or_else(|| id.to_string())
+    };
+
+    // Fetch route stops list for counting stops between vehicle and target
+    let route_stop_ids: Vec<String> = {
+        let route_stops_url = format!("{}/stops", BASE_URL);
+        let route_stops_params = [
+            ("filter[route]", stop.route_id.to_string()),
+            ("filter[direction_id]", stop.direction_id.to_string()),
+        ];
+        match client
+            .get(&route_stops_url)
+            .header("accept", "application/vnd.api+json")
+            .query(&route_stops_params)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.text().await {
+                    Ok(text) => serde_json::from_str::<RouteStopsResponse>(&text)
+                        .map(|r| r.data.into_iter().map(|s| s.id).collect())
+                        .unwrap_or_default(),
+                    Err(_) => vec![],
+                }
+            }
+            _ => vec![],
+        }
+    };
+
+    // Map predictions by trip_id, with vehicle and stop info
+    struct PredInfo {
+        attrs: PredictionAttributes,
+        vehicle_stop: Option<String>,
+        pred_stop: Option<String>,
+    }
+    let mut predictions_map: HashMap<String, PredInfo> = HashMap::new();
     for p in pred_resp.data {
-        predictions_map.insert(p.relationships.trip.data.id, p.attributes);
+        let vehicle_current_stop = p.relationships.vehicle
+            .as_ref()
+            .and_then(|v| v.data.as_ref())
+            .and_then(|d| vehicle_stop_ids.get(&d.id).cloned());
+        let pred_stop = p.relationships.stop
+            .as_ref()
+            .map(|s| s.data.id.clone());
+        predictions_map.insert(p.relationships.trip.data.id, PredInfo {
+            attrs: p.attributes,
+            vehicle_stop: vehicle_current_stop,
+            pred_stop,
+        });
     }
 
     let mut results = Vec::new();
@@ -303,19 +453,37 @@ async fn get_schedule_and_predictions(
 
         let sched_dt = parse_time(sched_time_str);
 
-        let pred_attr = predictions_map.get(&trip_id);
-        let pred_dt = if let Some(p) = pred_attr {
+        let pred_entry = predictions_map.get(&trip_id);
+        let (pred_dt, stops_away) = if let Some(info) = pred_entry {
             let pred_time_str = if stop.is_origin {
-                p.departure_time.clone()
+                info.attrs.departure_time.clone()
             } else {
-                p.arrival_time.clone().or(p.departure_time.clone())
+                info.attrs.arrival_time.clone().or(info.attrs.departure_time.clone())
             };
-            parse_time(pred_time_str)
+            let dt = parse_time(pred_time_str);
+            // Count actual stops between vehicle and target using route stops list
+            let sa = match (&info.vehicle_stop, &info.pred_stop) {
+                (Some(v_stop), Some(t_stop)) if !route_stop_ids.is_empty() => {
+                    let v_parent = to_parent(v_stop);
+                    let t_parent = to_parent(t_stop);
+                    let v_idx = route_stop_ids.iter().position(|id| *id == v_parent);
+                    let t_idx = route_stop_ids.iter().position(|id| *id == t_parent);
+                    match (v_idx, t_idx) {
+                        (Some(vi), Some(ti)) => {
+                            let diff = (ti as i32 - vi as i32).unsigned_abs() as i32;
+                            if diff > 0 && diff <= 20 { Some(diff) } else { None }
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            (dt, sa)
         } else {
-            None
+            (None, None)
         };
 
-        results.push(RowData { sched_dt, pred_dt });
+        results.push(RowData { sched_dt, pred_dt, stops_away });
     }
 
     // Sort by time (use prediction if available, otherwise scheduled)
@@ -411,7 +579,11 @@ fn format_stop_data(stop_name: &str, rows: &[RowData], now: DateTime<Local>) -> 
             (_, Some(pred)) => {
                 // Include seconds only for first live departure
                 let include_seconds = first_live_index == Some(idx);
-                format!("🟢 {}", format_time_compact_with_seconds(pred, now, include_seconds))
+                let base = format!("🟢 {}", format_time_compact_with_seconds(pred, now, include_seconds));
+                match row.stops_away {
+                    Some(n) if n > 0 => format!("{} ({} stop{})", base, n, if n == 1 { "" } else { "s" }),
+                    _ => base,
+                }
             }
             (Some(sched), None) => {
                 format!("📅 {}", format_time_compact(sched, now))
