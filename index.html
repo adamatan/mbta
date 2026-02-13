@@ -162,7 +162,18 @@
         }
 
         .live-indicator {
-            font-size: 14px;
+            width: 8px;
+            height: 8px;
+            min-width: 8px;
+            background: #2a9d2a;
+            border-radius: 50%;
+            display: inline-block;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(42, 157, 42, 0.5); }
+            50% { box-shadow: 0 0 0 4px rgba(42, 157, 42, 0); }
         }
 
         .scheduled-indicator {
@@ -729,7 +740,7 @@
                                         data-stop-id="${stop.stopId}"
                                         data-route="${stop.route}"
                                         data-direction="${stop.direction}">
-                                        <span class="live-indicator">🟢</span>
+                                        <span class="live-indicator"></span>
                                         <span>${formatTime(row.predDt, now, includeSeconds)}</span>
                                     </div>`;
                                 } else if (row.schedDt) {
@@ -1110,7 +1121,7 @@
 
                 if (nextPred) {
                     modalData = nextPred;
-                    let statusText = '<span style="font-size:20px;">🟢</span> Live Tracking';
+                    let statusText = '<span class="live-indicator" style="width:12px;height:12px;min-width:12px;"></span> Live Tracking';
                     // Count actual stops between vehicle and target using cached route stops
                     const vehicleCurrentStopId = nextVehicleId ? vehicleStopIds[nextVehicleId] : null;
                     const cacheKey = `${stop.route}_${stop.direction}`;
