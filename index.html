@@ -1096,7 +1096,7 @@
                         modalBusMarker = L.marker(busLatLng, {
                             icon: L.divIcon({
                                 className: '',
-                                html: '<div style="font-size:24px;text-align:center;">🚌</div>',
+                                html: `<div style="font-size:24px;text-align:center;">${stop.route.startsWith('Green') ? '🚃' : '🚌'}</div>`,
                                 iconSize: [28, 28],
                                 iconAnchor: [14, 14]
                             })
